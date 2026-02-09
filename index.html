@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BIO-SYNC | Leadless Pacemaker</title>
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@200;300;400;500;600&family=Space+Grotesk:wght@300;400;500&display=swap" rel="stylesheet">
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Three.js & GSAP -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/ScrollTrigger.min.js"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: { 
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['Space Grotesk', 'monospace']
+                    },
+                    colors: {
+                        'bio-dark': '#0B1120',
+                        'bio-blue': '#38bdf8',
+                        'bio-xray': '#00f3ff',
+                        'bio-pulse': '#ff3860',
+                    },
+                    backgroundImage: {
+                        'xray-pattern': "radial-gradient(#1e293b 1px, transparent 1px)",
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        body { margin: 0; overflow-x: hidden; background-color: #f8fafc; color: #334155; }
+        html { scroll-behavior: smooth; }
+
+        /* Canvas fixed behind content */
+        #canvas-container {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100vh;
+            z-index: 0; pointer-events: all;
+            background: radial-gradient(circle at 60% 40%, #f8fafc 0%, #cbd5e1 100%);
+            transition: background 0.5s ease;
+        }
+
+        /* Mode Styles */
+        body.xray-mode #canvas-container { background: #050505; }
+        body.sim-mode #canvas-container { background: #0f172a; }
+
+        /* Glassmorphism */
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+            border: 1px solid rgba(255, 255, 255, 0.9);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.05);
+        }
+        .glass-dark {
+            background: rgba(15, 23, 42, 0.7);
+            backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            color: white;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+        }
+
+        /* Floating Labels */
+        .label-point { position: absolute; width: 0; height: 0; pointer-events: none; z-index: 10; }
+        .label-content { 
+            position: absolute; left: 30px; top: -15px; width: 220px; 
+            opacity: 0; transform: translateX(-20px); 
+            transition: all 0.5s cubic-bezier(0.19, 1, 0.22, 1); 
+            pointer-events: none; 
+        }
+        .label-point.visible .label-content { opacity: 1; transform: translateX(0); }
+        .label-line { 
+            position: absolute; top: 0; left: 0; width: 0px; height: 1px; 
+            background: #38bdf8; box-shadow: 0 0 10px #38bdf8;
+            transition: width 0.4s ease 0.1s; 
+        }
+        .label-point.visible .label-line { width: 30px; }
+
+        /* Loader */
+        #loader { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #fff; z-index: 9999; display: flex; justify-content: center; align-items: center; flex-direction: column; transition: opacity 0.8s ease; }
+        
+        /* Range Slider */
+        input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; }
+        input[type=range]:focus { outline: none; }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 16px; width: 16px; border-radius: 50%; background: #38bdf8; cursor: pointer; margin-top: -6px; box-shadow: 0 0 15px rgba(56, 189, 248, 0.8); border: 2px solid white; }
+        input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 4px; cursor: pointer; background: rgba(255,255,255,0.2); border-radius: 2px; }
+        
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 3px; }
+    </style>
+</head>
+<body>
+
+    <!-- Loader -->
+    <div id="loader">
+        <div class="flex items-center gap-3 mb-6">
+            <div class="w-2 h-2 rounded-full bg-blue-500 animate-ping"></div>
+            <h1 class="text-3xl font-light tracking-[0.4em] text-slate-900">BIO-SYNC</h1>
+        </div>
+        <div class="w-48 h-0.5 bg-slate-100 overflow-hidden relative rounded-full">
+            <div class="absolute inset-0 bg-slate-900 w-full animate-[shimmer_1.5s_infinite]"></div>
+        </div>
+        <p class="text-[9px] text-slate-400 mt-4 font-mono tracking-widest uppercase">Initializing Bio-Systems</p>
+    </div>
+
+    <!-- 3D Canvas -->
+    <div id="canvas-container"></div>
+
+    <!-- Labels Container -->
+    <div id="labels-container" class="fixed inset-0 pointer-events-none z-10 hidden"></div>
+
+    <!-- Modal for Reservation (Backend) -->
+    <div id="reserve-modal" class="fixed inset-0 z-[100] hidden flex items-center justify-center bg-slate-900/40 backdrop-blur-md opacity-0 transition-opacity duration-300">
+        <div class="bg-white/90 backdrop-blur-xl p-8 rounded-2xl shadow-2xl max-w-md w-full mx-4 transform scale-95 transition-transform duration-300 border border-white/50" id="modal-content">
+            <div class="flex justify-between items-center mb-6">
+                <h3 class="text-xl font-medium text-slate-900 tracking-tight">Reserve Priority Access</h3>
+                <button onclick="toggleModal(false)" class="text-slate-400 hover:text-slate-900 transition">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+            </div>
+            <p class="text-sm text-slate-500 mb-6 leading-relaxed">Join the exclusive waitlist for the next generation of cardiac care. Limited availability for initial clinical partners.</p>
+            <form id="reserve-form" class="space-y-4">
+                <div>
+                    <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Email Address</label>
+                    <input type="email" id="email-input" required class="w-full px-4 py-3 rounded-lg bg-slate-50 border border-slate-200 focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 outline-none transition text-sm" placeholder="dr.strange@clinic.com">
+                </div>
+                <button type="submit" class="w-full bg-slate-900 text-white text-xs font-bold tracking-widest py-4 rounded-lg hover:bg-blue-600 transition shadow-lg hover:shadow-xl hover:-translate-y-0.5 transform flex justify-center items-center gap-2">
+                    <span>CONFIRM RESERVATION</span>
+                    <span id="btn-spinner" class="hidden w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+                </button>
+            </form>
+            <div id="form-success" class="hidden mt-4 p-3 bg-green-50 text-green-700 text-xs rounded-lg text-center font-medium border border-green-100 flex items-center justify-center gap-2">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                Reservation confirmed.
+            </div>
+        </div>
+    </div>
+
+    <!-- Navigation -->
+    <nav class="fixed top-0 w-full z-50 px-8 py-6 flex justify-between items-center mix-blend-difference text-white md:mix-blend-normal md:text-slate-800 transition-colors duration-300" id="main-nav">
+        <div class="flex items-center gap-3">
+            <div class="w-2 h-2 rounded-full bg-blue-500 animate-pulse shadow-[0_0_10px_#3b82f6]"></div>
+            <span class="text-lg font-bold tracking-widest uppercase">Bio-Sync</span>
+        </div>
+        
+        <div class="hidden md:flex items-center gap-1 bg-white/60 backdrop-blur-md px-1.5 py-1.5 rounded-full border border-white/60 shadow-sm">
+            <a href="#overview" class="px-5 py-2 rounded-full text-[11px] font-bold tracking-wide hover:bg-white transition-all text-slate-500 hover:text-slate-900">OVERVIEW</a>
+            <a href="#anatomy" class="px-5 py-2 rounded-full text-[11px] font-bold tracking-wide hover:bg-white transition-all text-slate-500 hover:text-slate-900">ANATOMY</a>
+            <a href="#xray" class="px-5 py-2 rounded-full text-[11px] font-bold tracking-wide hover:bg-white transition-all text-slate-500 hover:text-slate-900">X-RAY</a>
+            <a href="#simulation" class="px-5 py-2 rounded-full text-[11px] font-bold tracking-wide hover:bg-white transition-all text-slate-500 hover:text-slate-900">SIMULATION</a>
+        </div>
+
+        <button onclick="toggleModal(true)" class="hidden md:block bg-slate-900 text-white text-[10px] font-bold px-6 py-3 rounded-full hover:bg-blue-600 transition-all shadow-xl tracking-widest hover:scale-105">
+            RESERVE
+        </button>
+    </nav>
+
+    <!-- UI Overlay -->
+    <div id="ui-overlay" class="fixed bottom-10 left-10 z-40 flex flex-col gap-4 pointer-events-none opacity-0 transition-opacity duration-1000">
+        <div class="glass-panel p-4 rounded-xl max-w-xs pointer-events-auto cursor-help hover:scale-105 transition-transform border-l-4 border-l-green-500">
+            <h4 class="text-[9px] font-bold text-slate-400 uppercase mb-1 tracking-wider">System Status</h4>
+            <div class="flex items-center gap-2">
+                <span class="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></span>
+                <span class="text-xs font-bold text-slate-700 font-mono" id="status-text">NOMINAL OPERATION</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <main class="relative z-20"> 
+        
+        <!-- HERO SECTION -->
+        <section id="overview" class="h-screen w-full flex items-center px-8 md:px-24 pointer-events-none">
+            <div class="max-w-3xl pointer-events-auto">
+                <div class="inline-flex items-center gap-2 px-4 py-1.5 border border-slate-200 bg-white/40 backdrop-blur rounded-full mb-8 shadow-sm">
+                    <span class="w-1.5 h-1.5 bg-blue-500 rounded-full"></span>
+                    <span class="text-[10px] font-bold tracking-[0.2em] text-slate-600 uppercase">FDA Breakthrough Device</span>
+                </div>
+                <h1 class="text-6xl md:text-9xl font-light text-slate-900 leading-[0.85] mb-8 tracking-tighter">
+                    Rhythm <br><span class="italic font-serif text-slate-400 font-extralight">Redefined.</span>
+                </h1>
+                <p class="text-lg text-slate-600 mb-10 font-light leading-relaxed max-w-lg">
+                    The world's smallest autonomous pacing system. 
+                    <span class="font-medium text-slate-900">Titanium housing</span>, 
+                    <span class="font-medium text-slate-900">kinetic harvesting</span>, and 
+                    <span class="font-medium text-slate-900">wireless syncing</span>.
+                </p>
+                <div class="flex gap-4">
+                    <button onclick="scrollToSection('anatomy')" class="px-8 py-4 bg-slate-900 text-white text-xs font-bold tracking-widest rounded-full hover:bg-blue-600 transition shadow-2xl hover:scale-105">EXPLORE SYSTEM</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- ANATOMY SECTION -->
+        <section id="anatomy" class="min-h-screen w-full relative flex items-center justify-end px-8 md:px-24 pointer-events-none">
+            <div class="max-w-md pointer-events-auto glass-panel p-10 rounded-3xl border border-white shadow-2xl">
+                <h2 class="text-4xl font-light mb-2 text-slate-900 tracking-tight">Precision <br>Engineering</h2>
+                <div class="w-12 h-1 bg-blue-500 mb-6 mt-2"></div>
+                <p class="text-sm text-slate-500 mb-8 mt-4 leading-relaxed">
+                    Hover over the components to understand the micro-architecture. Every micron is designed for longevity.
+                </p>
+                <div class="space-y-3">
+                    <div class="group flex items-center gap-4 p-4 rounded-2xl bg-white/50 hover:bg-white transition-all cursor-pointer border border-transparent hover:border-blue-100 hover:shadow-md hover:-translate-x-1" onmouseenter="focusPart('battery')">
+                        <div class="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center text-blue-600 font-bold text-xs group-hover:bg-blue-600 group-hover:text-white transition-colors">01</div>
+                        <div><h3 class="font-bold text-slate-800 text-sm">Solid-State Battery</h3><p class="text-[10px] text-slate-400 font-mono mt-0.5">12+ YEAR LIFECYCLE</p></div>
+                    </div>
+                    <div class="group flex items-center gap-4 p-4 rounded-2xl bg-white/50 hover:bg-white transition-all cursor-pointer border border-transparent hover:border-blue-100 hover:shadow-md hover:-translate-x-1" onmouseenter="focusPart('harvester')">
+                        <div class="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center text-blue-600 font-bold text-xs group-hover:bg-blue-600 group-hover:text-white transition-colors">02</div>
+                        <div><h3 class="font-bold text-slate-800 text-sm">Piezo Kinetic Harvester</h3><p class="text-[10px] text-slate-400 font-mono mt-0.5">SELF-CHARGING</p></div>
+                    </div>
+                    <div class="group flex items-center gap-4 p-4 rounded-2xl bg-white/50 hover:bg-white transition-all cursor-pointer border border-transparent hover:border-blue-100 hover:shadow-md hover:-translate-x-1" onmouseenter="focusPart('chip')">
+                        <div class="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center text-blue-600 font-bold text-xs group-hover:bg-blue-600 group-hover:text-white transition-colors">03</div>
+                        <div><h3 class="font-bold text-slate-800 text-sm">ASIC Neural Processor</h3><p class="text-[10px] text-slate-400 font-mono mt-0.5">REAL-TIME AI LOGIC</p></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- X-RAY SECTION -->
+        <section id="xray" class="h-screen w-full relative flex flex-col items-center justify-center bg-black/5 pointer-events-none">
+            <div class="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')] opacity-5"></div>
+            <div class="pointer-events-auto text-center z-10 mix-blend-difference text-white">
+                <div class="inline-block px-4 py-1 border border-white/30 rounded-full text-[10px] font-mono mb-6 animate-pulse text-cyan-400 bg-black/20 backdrop-blur">LIVE FLUOROSCOPY FEED</div>
+                <h2 class="text-5xl md:text-8xl font-bold tracking-tighter mb-6 text-transparent bg-clip-text bg-gradient-to-b from-white to-slate-600">X-RAY VISION</h2>
+                <p class="text-slate-400 max-w-md mx-auto text-sm font-mono mb-8 opacity-80">Visualizing internal density and structural integrity.</p>
+            </div>
+            <div class="pointer-events-auto flex gap-4 mt-8 z-10">
+                <div class="w-80 h-40 border border-white/20 rounded-xl relative overflow-hidden bg-black/50 backdrop-blur shadow-[0_0_50px_rgba(0,243,255,0.2)]">
+                    <div class="absolute top-0 left-0 w-full h-full bg-[linear-gradient(90deg,transparent_0%,rgba(0,243,255,0.1)_50%,transparent_100%)] animate-[scan_2s_linear_infinite]"></div>
+                    <svg class="absolute inset-0 w-full h-full text-cyan-400 opacity-80 drop-shadow-[0_0_5px_rgba(0,243,255,0.8)]" viewBox="0 0 100 20" preserveAspectRatio="none">
+                        <path fill="none" stroke="currentColor" stroke-width="0.5" d="M0,10 Q5,10 10,10 T20,10 T30,5 T35,15 T40,10 T100,10" class="animate-[dash_2s_linear_infinite]"><animate attributeName="d" values="M0,10 Q5,10 10,10 T20,10 T30,10 T35,10 T40,10 T100,10; M0,10 Q5,10 10,10 T20,10 T30,5 T35,15 T40,10 T100,10; M0,10 Q5,10 10,10 T20,10 T30,10 T35,10 T40,10 T100,10" dur="2s" repeatCount="indefinite"/></path>
+                    </svg>
+                    <div class="absolute bottom-2 left-3 text-[8px] text-cyan-500 font-mono">SIGNAL: STRONG</div>
+                    <div class="absolute bottom-2 right-3 text-[8px] text-cyan-500 font-mono">120 FPS</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- SIMULATION SECTION -->
+        <section id="simulation" class="h-screen w-full relative flex items-center justify-between px-8 md:px-12 pointer-events-none bg-slate-900/50">
+            <!-- Left Side controls -->
+            <div class="pointer-events-auto glass-dark p-10 rounded-3xl w-full max-w-md border-l-4 border-red-500 shadow-2xl">
+                <div class="flex items-center justify-between mb-8">
+                    <h2 class="text-4xl font-light text-white tracking-tight">Rate Response <br><span class="font-bold text-red-500">Simulation</span></h2>
+                    <div class="w-4 h-4 bg-red-500 rounded-full animate-pulse shadow-[0_0_20px_rgba(239,68,68,0.8)]"></div>
+                </div>
+                
+                <p class="text-xs text-slate-400 mb-10 font-mono leading-relaxed">
+                    Adjust the simulated patient activity level. BIO-SYNC utilizes its on-board accelerometer to dynamically adjust pacing rate based on metabolic demand.
+                </p>
+
+                <div class="mb-10">
+                    <div class="flex justify-between text-[10px] text-slate-400 mb-4 font-bold tracking-[0.2em] uppercase">
+                        <span>Resting</span>
+                        <span>Activity Level</span>
+                        <span>Sprint</span>
+                    </div>
+                    <div class="relative flex items-center">
+                        <input type="range" min="40" max="140" value="60" id="bpm-slider" class="w-full relative z-10">
+                        <div class="absolute w-full h-1 bg-gradient-to-r from-blue-500 via-purple-500 to-red-500 rounded-full opacity-50"></div>
+                    </div>
+                    <div class="flex justify-center mt-6">
+                        <span id="bpm-display" class="text-5xl text-white font-mono font-light tracking-tighter">60</span>
+                        <span class="text-xs text-slate-500 font-bold ml-2 mt-4">BPM</span>
+                    </div>
+                </div>
+
+                <div class="border border-slate-700 bg-black/60 rounded-xl p-4 relative overflow-hidden h-40 shadow-inner">
+                    <div class="absolute inset-0 bg-[linear-gradient(0deg,transparent_0%,rgba(56,189,248,0.05)_50%,transparent_100%)] pointer-events-none"></div>
+                    <div class="grid grid-cols-10 grid-rows-4 absolute inset-0 opacity-20 pointer-events-none">
+                        <!-- grid lines generated by css for simplicity -->
+                        <div class="border-r border-b border-cyan-900 w-full h-full"></div>
+                    </div>
+                    <canvas id="ecg-canvas" class="w-full h-full relative z-10 mix-blend-screen"></canvas>
+                    <div class="absolute top-3 right-3 text-[8px] text-cyan-500/70 font-mono tracking-widest">LEAD II // REALTIME</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- FOOTER -->
+        <footer class="bg-black text-white py-24 px-8 relative z-20 border-t border-white/10">
+            <div class="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-4 gap-12">
+                <div class="col-span-1 md:col-span-2">
+                    <h2 class="text-3xl font-bold tracking-[0.2em] mb-6">BIO-SYNC</h2>
+                    <p class="text-slate-500 text-sm max-w-sm leading-relaxed font-light">Redefining the interface between biology and technology. Seamless, invisible, life-sustaining.</p>
+                </div>
+                <div>
+                    <h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-6">Connect</h3>
+                    <ul class="space-y-4 text-sm text-slate-300 font-light">
+                        <li><button onclick="toggleModal(true)" class="hover:text-blue-400 transition text-left hover:translate-x-1 duration-300 inline-block">Clinical Partners</button></li>
+                        <li><button onclick="toggleModal(true)" class="hover:text-blue-400 transition text-left hover:translate-x-1 duration-300 inline-block">Investors</button></li>
+                        <li><button onclick="toggleModal(true)" class="hover:text-blue-400 transition text-left hover:translate-x-1 duration-300 inline-block">Join Waitlist</button></li>
+                    </ul>
+                </div>
+                <div class="flex flex-col justify-end">
+                    <div class="text-[10px] text-slate-600 font-mono tracking-widest">
+                        © 2026 BIO-SYNC LABS.<br>
+                        PROJECT BY MISHTHA BANSAL<br>
+                        SYSTEM VERSION 2.5.0
+                    </div>
+                </div>
+            </div>
+        </footer>
+
+    </main>
+
+    <!-- SCRIPTS -->
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+        import { getAuth, signInAnonymously } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+        import { getFirestore, collection, addDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+
+        // --- FIREBASE / BACKEND HANDLING ---
+        let db, auth;
+        let isDemoMode = false;
+        
+        try {
+            if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+                const firebaseConfig = JSON.parse(__firebase_config);
+                const app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+                signInAnonymously(auth).then(() => {
+                    console.log("System connected securely.");
+                }).catch((error) => console.warn("Auth failed:", error));
+            } else {
+                throw new Error("No config found");
+            }
+        } catch (e) {
+            console.warn("Backend not configured. Running in Demo Mode.");
+            isDemoMode = true;
+        }
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-bio-sync';
+
+        // Global Modal Logic
+        window.toggleModal = (show) => {
+            const modal = document.getElementById('reserve-modal');
+            const content = document.getElementById('modal-content');
+            if (show) {
+                modal.classList.remove('hidden');
+                setTimeout(() => {
+                    modal.classList.remove('opacity-0');
+                    content.classList.remove('scale-95');
+                }, 10);
+            } else {
+                modal.classList.add('opacity-0');
+                content.classList.add('scale-95');
+                setTimeout(() => modal.classList.add('hidden'), 300);
+            }
+        };
+
+        // Form Submission
+        document.getElementById('reserve-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const email = document.getElementById('email-input').value;
+            const btn = e.target.querySelector('button');
+            const spinner = document.getElementById('btn-spinner');
+            
+            btn.disabled = true;
+            spinner.classList.remove('hidden');
+
+            try {
+                if (!isDemoMode && auth) {
+                    if(!auth.currentUser) await signInAnonymously(auth);
+                    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'reservations'), {
+                        email: email,
+                        source: 'web_modal',
+                        timestamp: serverTimestamp()
+                    });
+                } else {
+                    await new Promise(resolve => setTimeout(resolve, 1500));
+                    console.log("Demo reservation captured for:", email);
+                }
+
+                document.getElementById('form-success').classList.remove('hidden');
+                e.target.reset();
+                setTimeout(() => toggleModal(false), 2000);
+            } catch (err) {
+                console.error("Transmission Error:", err);
+                alert("Connection failed. Please try again.");
+            } finally {
+                btn.disabled = false;
+                spinner.classList.add('hidden');
+            }
+        });
+
+        // --- 3D SCENE SETUP ---
+        const scene = new THREE.Scene();
+        // Slightly wider field of view for cinematic look
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+        
+        let renderer;
+        try {
+            renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+        } catch (error) {
+            console.error("WebGL Error:", error);
+            document.body.innerHTML = '<div style="color: black; text-align: center; margin-top: 20%; font-family: sans-serif;"><h1>Graphics Initialization Failed</h1><p>Please refresh the page to clear WebGL contexts.</p></div>';
+            throw error;
+        }
+        
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.toneMapping = THREE.ACESFilmicToneMapping; 
+        renderer.toneMappingExposure = 1.0;
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+        camera.position.set(6, 2, 8); 
+
+        // --- MATERIALS ---
+        const materials = {
+            normal: {
+                titanium: new THREE.MeshPhysicalMaterial({ 
+                    color: 0xc0c0c0, // Lighter Silver
+                    metalness: 0.6,  // Reduced for better visibility without HDRI
+                    roughness: 0.4, 
+                    clearcoat: 1.0, 
+                    clearcoatRoughness: 0.1
+                }),
+                gold: new THREE.MeshPhysicalMaterial({ 
+                    color: 0xffd700, 
+                    metalness: 1.0, 
+                    roughness: 0.15,
+                    clearcoat: 0.5
+                }),
+                chip: new THREE.MeshStandardMaterial({ 
+                    color: 0x002200, 
+                    metalness: 0.5, 
+                    roughness: 0.3 
+                }),
+                nitinol: new THREE.MeshStandardMaterial({ 
+                    color: 0x222222, 
+                    metalness: 0.7, 
+                    roughness: 0.4 
+                }),
+                emissive: new THREE.MeshStandardMaterial({ 
+                    color: 0x111111, 
+                    emissive: 0x000000, 
+                    metalness: 0.8, 
+                    roughness: 0.4 
+                }),
+                internalComp: new THREE.MeshStandardMaterial({ 
+                    color: 0xdddddd, 
+                    metalness: 0.2, 
+                    roughness: 0.2 
+                })
+            },
+            xray: {
+                shell: new THREE.MeshBasicMaterial({ color: 0x00f3ff, wireframe: true, transparent: true, opacity: 0.1 }),
+                internal: new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, transparent: true, opacity: 0.3 }),
+                core: new THREE.MeshBasicMaterial({ color: 0x38bdf8, wireframe: false, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending })
+            }
+        };
+
+        // --- BUILD PACEMAKER ---
+        const pacemaker = new THREE.Group();
+        const parts = {};
+
+        // 1. Housing (Main Shell)
+        const shellGeo = new THREE.CylinderGeometry(0.8, 0.8, 3.5, 64, 1, true);
+        const shell = new THREE.Mesh(shellGeo, materials.normal.titanium);
+        shell.rotation.z = Math.PI / 2; 
+        shell.castShadow = true;
+        shell.receiveShadow = true;
+        parts.shell = shell; 
+        pacemaker.add(shell);
+
+        // 2. Rear Cap
+        const rearCapGeo = new THREE.SphereGeometry(0.8, 64, 32, 0, Math.PI*2, 0, Math.PI/2);
+        const rearCap = new THREE.Mesh(rearCapGeo, materials.normal.titanium);
+        rearCap.rotation.z = -Math.PI / 2; 
+        rearCap.position.x = -1.75;
+        parts.rearCap = rearCap; 
+        pacemaker.add(rearCap);
+
+        // 3. Front Cap
+        const frontCapGroup = new THREE.Group();
+        const fcBase = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.5, 0.5, 64), materials.normal.titanium);
+        fcBase.rotation.z = Math.PI/2;
+        frontCapGroup.add(fcBase);
+        frontCapGroup.position.x = 2.0; 
+        parts.frontCap = frontCapGroup;
+        pacemaker.add(frontCapGroup);
+
+        // 4. Battery
+        const battery = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 1.5, 32), materials.normal.internalComp);
+        battery.rotation.z = Math.PI / 2; 
+        battery.position.x = -0.8;
+        parts.battery = battery; 
+        pacemaker.add(battery);
+
+        // 5. Harvester
+        const harvesterGroup = new THREE.Group();
+        for(let i=0; i<6; i++) {
+            const plate = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.9, 0.9), materials.normal.gold);
+            plate.position.x = i * 0.12; 
+            harvesterGroup.add(plate);
+        }
+        harvesterGroup.position.x = 0.4;
+        parts.harvester = harvesterGroup; 
+        pacemaker.add(harvesterGroup);
+
+        // 6. Chip
+        const chip = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.05, 0.6), materials.normal.chip);
+        chip.position.set(1.2, 0, 0);
+        parts.chip = chip; 
+        pacemaker.add(chip);
+
+        // 7. Electrode Tip
+        const tip = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.4, 16), materials.normal.emissive);
+        tip.rotation.z = Math.PI/2; 
+        tip.position.x = 0.45;
+        frontCapGroup.add(tip);
+        parts.tip = tip;
+
+        // 8. Tines
+        const tinesGroup = new THREE.Group();
+        for(let i=0; i<4; i++){
+            const curve = new THREE.CatmullRomCurve3([
+                new THREE.Vector3(0, 0, 0),
+                new THREE.Vector3(0.2, 0.3, 0),
+                new THREE.Vector3(0.1, 0.5, 0)
+            ]);
+            const tube = new THREE.TubeGeometry(curve, 8, 0.03, 8, false);
+            const t = new THREE.Mesh(tube, materials.normal.nitinol);
+            const angle = (i / 4) * Math.PI * 2;
+            t.rotation.x = angle;
+            t.position.set(0, 0.3 * Math.cos(angle), 0.3 * Math.sin(angle));
+            tinesGroup.add(t);
+        }
+        tinesGroup.position.x = 0; 
+        frontCapGroup.add(tinesGroup);
+        parts.tines = tinesGroup;
+
+        scene.add(pacemaker);
+
+        // --- LIGHTING ---
+        const ambient = new THREE.AmbientLight(0xffffff, 0.4); 
+        scene.add(ambient);
+
+        const keyLight = new THREE.DirectionalLight(0xffffff, 1.5);
+        keyLight.position.set(5, 5, 5);
+        keyLight.castShadow = true;
+        scene.add(keyLight);
+
+        const fillLight = new THREE.PointLight(0x38bdf8, 0.8);
+        fillLight.position.set(-5, 0, 5);
+        scene.add(fillLight);
+
+        const rimLight = new THREE.SpotLight(0xffffff, 2);
+        rimLight.position.set(-2, 5, -5);
+        rimLight.lookAt(0,0,0);
+        scene.add(rimLight);
+
+        const redLight = new THREE.PointLight(0xff3860, 0, 5); 
+        redLight.position.set(2.5, 0, 1); 
+        scene.add(redLight);
+
+        // --- LABELS ---
+        const labelsContainer = document.getElementById('labels-container');
+        const labels = [
+            { text: "Li-Ion Micro-Cell", target: parts.battery, offset: new THREE.Vector3(0, 0.6, 0) },
+            { text: "Piezo Stack", target: parts.harvester, offset: new THREE.Vector3(0, -0.6, 0) },
+            { text: "ASIC Processor", target: parts.chip, offset: new THREE.Vector3(0, 0.5, 0) }
+        ];
+        
+        labels.forEach(l => {
+            const el = document.createElement('div'); el.className = 'label-point';
+            el.innerHTML = `
+                <div class="label-line"></div>
+                <div class="label-content">
+                    <div class="text-[10px] font-bold text-blue-500 tracking-wider uppercase bg-white/95 px-3 py-2 rounded-sm shadow-sm inline-block backdrop-blur border-l-2 border-blue-500 font-mono">
+                        ${l.text}
+                    </div>
+                </div>`;
+            labelsContainer.appendChild(el); l.element = el;
+        });
+
+        // --- STATE & ANIMATION ---
+        let anatomyTrigger = null;
+        let state = { 
+            exploded: false, 
+            xray: false, 
+            autoRotate: true, 
+            simMode: false, 
+            bpm: 60,
+            focusTarget: new THREE.Vector3(0, 0, 0)
+        };
+        gsap.registerPlugin(ScrollTrigger);
+
+        // --- SCROLL TRIGGERS ---
+        const introTl = gsap.timeline();
+        introTl.from(camera.position, { x: 12, y: 4, z: 12, duration: 2.5, ease: "power3.out" })
+               .add(() => {
+                   document.getElementById('loader').style.opacity = 0;
+                   setTimeout(() => document.getElementById('loader').remove(), 1000);
+                   document.getElementById('ui-overlay').style.opacity = 1;
+               }, "-=0.5");
+
+        anatomyTrigger = ScrollTrigger.create({
+            id: "anatomy", 
+            trigger: "#anatomy", 
+            start: "top center", 
+            end: "bottom center",
+            onEnter: () => { 
+                explode(true); 
+                document.getElementById('labels-container').classList.remove('hidden'); 
+                gsap.to(camera.position, {x: 0, y: 2, z: 6, duration: 1.5, ease: "power2.inOut"}); 
+                state.autoRotate = false; 
+                gsap.to(pacemaker.rotation, {x:0, y:0, z:0, duration: 1}); 
+            },
+            onLeave: () => { 
+                explode(false); 
+                document.getElementById('labels-container').classList.add('hidden'); 
+                state.autoRotate = true; 
+            },
+            onEnterBack: () => { 
+                explode(true); 
+                document.getElementById('labels-container').classList.remove('hidden'); 
+                state.autoRotate = false; 
+                gsap.to(camera.position, {x: 0, y: 2, z: 6, duration: 1.5}); 
+            },
+            onLeaveBack: () => { 
+                explode(false); 
+                document.getElementById('labels-container').classList.add('hidden'); 
+                state.autoRotate = true; 
+                gsap.to(camera.position, {x: 6, y: 2, z: 8, duration: 1.5}); 
+            }
+        });
+
+        ScrollTrigger.create({
+            trigger: "#xray", start: "top center", end: "bottom bottom",
+            onEnter: () => toggleXray(true), onLeave: () => toggleXray(false), 
+            onEnterBack: () => toggleXray(true), onLeaveBack: () => toggleXray(false)
+        });
+
+        ScrollTrigger.create({
+            trigger: "#simulation", start: "top center", end: "bottom bottom",
+            onEnter: () => toggleSim(true), onLeave: () => toggleSim(false), 
+            onEnterBack: () => toggleSim(true), onLeaveBack: () => toggleSim(false)
+        });
+
+        // --- HELPER FUNCTIONS ---
+        function explode(isExploded) {
+            state.exploded = isExploded;
+            const ease = "power3.out"; const dur = 1.5;
+            gsap.to(parts.rearCap.position, { x: isExploded ? -3.5 : -1.75, duration: dur, ease: ease });
+            gsap.to(parts.battery.position, { x: isExploded ? -1.5 : -0.8, y: isExploded ? 0.6 : 0, z: isExploded ? 0.2 : 0, duration: dur, ease: ease, delay: 0.05 });
+            gsap.to(parts.harvester.position, { x: isExploded ? 0.8 : 0.4, y: isExploded ? -0.6 : 0, z: isExploded ? -0.2 : 0, duration: dur, ease: ease, delay: 0.1 });
+            gsap.to(parts.chip.position, { x: isExploded ? 2.2 : 1.2, duration: dur, ease: ease, delay: 0.15 });
+            gsap.to(parts.frontCap.position, { x: isExploded ? 3.5 : 2.0, duration: dur, ease: ease });
+            
+            if(isExploded && !state.xray) {
+                parts.shell.material.transparent = true;
+                gsap.to(parts.shell.material, { opacity: 0.15, duration: 0.5 });
+            } else if (!state.xray) {
+                gsap.to(parts.shell.material, { opacity: 1, duration: 0.5, onComplete: () => { parts.shell.material.transparent = false; } });
+            }
+            setTimeout(() => { labels.forEach(l => { if(isExploded) l.element.classList.add('visible'); else l.element.classList.remove('visible'); }); }, isExploded ? 500 : 0);
+        }
+
+        function toggleXray(active) {
+            state.xray = active;
+            if(active) {
+                document.body.classList.add('xray-mode');
+                parts.shell.material = materials.xray.shell;
+                parts.battery.material = materials.xray.internal;
+                parts.harvester.children.forEach(c => c.material = materials.xray.core);
+                parts.chip.material = materials.xray.core;
+                state.autoRotate = true;
+                gsap.to(camera.position, { x: 0, y: 0, z: 5, duration: 1 });
+            } else {
+                document.body.classList.remove('xray-mode');
+                parts.shell.material = materials.normal.titanium;
+                parts.battery.material = new THREE.MeshStandardMaterial({color: 0xaaaaaa, metalness: 0.8});
+                parts.harvester.children.forEach(c => c.material = materials.normal.gold);
+                parts.chip.material = materials.normal.chip;
+                if(anatomyTrigger && anatomyTrigger.isActive) { parts.shell.material.transparent = true; parts.shell.material.opacity = 0.15; }
+            }
+        }
+
+        function toggleSim(active) {
+            state.simMode = active;
+            state.autoRotate = !active;
+            
+            gsap.killTweensOf(camera.position);
+            gsap.killTweensOf(pacemaker.position);
+            gsap.killTweensOf(pacemaker.rotation);
+            gsap.killTweensOf(state.focusTarget);
+
+            if(active) {
+                document.body.classList.add('sim-mode');
+                
+                // Move Camera straight back
+                gsap.to(camera.position, { x: 0, y: 0, z: 14, duration: 1.5, ease: "power2.inOut" });
+                
+                // Reset camera focus to center
+                gsap.to(state.focusTarget, { x: 0, y: 0, z: 0, duration: 1.5 });
+
+                // Move OBJECT to the right (positive X) so it's visible on the right side
+                gsap.to(pacemaker.position, { x: 3.5, y: 0, z: 0, duration: 1.5, ease: "power2.inOut" });
+
+                // Rotate to SIDE VIEW (y:0) to see full length
+                gsap.to(pacemaker.rotation, { x: 0, y: 0, z: 0, duration: 1 }); 
+                
+                // Force Opaque Solid Shell
+                parts.shell.material.transparent = false;
+                parts.shell.material.opacity = 1.0;
+                
+            } else {
+                document.body.classList.remove('sim-mode');
+                parts.tip.material.emissive.setHex(0x000000);
+                redLight.intensity = 0;
+                
+                gsap.to(camera.position, { x: 0, y: 0, z: 12, duration: 1.5 }); 
+                gsap.to(pacemaker.position, { x: 0, y: 0, z: 0, duration: 1 });
+                gsap.to(parts.shell.material, { opacity: 1, duration: 1 });
+            }
+        }
+
+        window.focusPart = function(partName) {
+            if(!anatomyTrigger || !anatomyTrigger.isActive) return;
+            let target;
+            if(partName === 'battery') target = parts.battery;
+            if(partName === 'harvester') target = parts.harvester;
+            if(partName === 'chip') target = parts.chip;
+            if(target) gsap.to(target.scale, { x: 1.15, y: 1.15, z: 1.15, duration: 0.3, yoyo: true, repeat: 1 });
+        }
+
+        window.scrollToSection = function(id) { document.getElementById(id).scrollIntoView(); }
+
+        // --- SIMULATION LOGIC ---
+        const bpmSlider = document.getElementById('bpm-slider');
+        const bpmDisplay = document.getElementById('bpm-display');
+        const ecgCanvas = document.getElementById('ecg-canvas');
+        const ctx = ecgCanvas.getContext('2d');
+        let ecgTime = 0;
+
+        bpmSlider.addEventListener('input', (e) => {
+            state.bpm = parseInt(e.target.value);
+            bpmDisplay.innerHTML = `${state.bpm} <span class="text-xs text-slate-500 font-bold ml-2">BPM</span>`;
+        });
+
+        // --- RENDER LOOP ---
+        const clock = new THREE.Clock();
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            const time = clock.getElapsedTime();
+
+            camera.lookAt(state.focusTarget);
+
+            if(state.autoRotate) {
+                pacemaker.rotation.y += state.xray ? 0.02 : 0.003;
+                pacemaker.rotation.z = Math.sin(time * 0.3) * 0.05; 
+            }
+
+            if(anatomyTrigger && anatomyTrigger.isActive) {
+                labels.forEach(l => {
+                    const pos = new THREE.Vector3();
+                    l.target.getWorldPosition(pos); pos.add(l.offset); pos.project(camera);
+                    const x = (pos.x * .5 + .5) * window.innerWidth;
+                    const y = (pos.y * -.5 + .5) * window.innerHeight;
+                    l.element.style.transform = `translate(${x}px, ${y}px)`;
+                });
+            }
+
+            if(state.simMode) {
+                const interval = 60 / state.bpm;
+                const pulse = (time % interval) / interval; 
+                if(pulse < 0.15) {
+                    const scale = 1 + Math.sin(pulse * Math.PI * 6) * 0.03;
+                    pacemaker.scale.set(scale, scale, scale);
+                    parts.tip.material.emissive.setHex(0xff3860);
+                    redLight.intensity = 1.5;
+                } else {
+                    pacemaker.scale.set(1, 1, 1);
+                    parts.tip.material.emissive.setHex(0x000000);
+                    redLight.intensity = 0;
+                }
+                drawECG();
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        function drawECG() {
+            if(ecgCanvas.width !== ecgCanvas.offsetWidth) {
+                ecgCanvas.width = ecgCanvas.offsetWidth;
+                ecgCanvas.height = ecgCanvas.offsetHeight;
+            }
+            
+            ctx.clearRect(0, 0, ecgCanvas.width, ecgCanvas.height);
+            ctx.strokeStyle = '#38bdf8';
+            ctx.lineWidth = 2;
+            ctx.shadowBlur = 5;
+            ctx.shadowColor = '#38bdf8';
+            ctx.beginPath();
+
+            ecgTime += 2; 
+
+            for (let x = 0; x < ecgCanvas.width; x++) {
+                const t = (x + ecgTime) * (state.bpm / 8000); 
+                const phase = t % 1;
+                let y = ecgCanvas.height / 2;
+                const amp = 20; 
+                
+                y -= (amp * 0.3) * Math.exp(-Math.pow((phase - 0.2) * 25, 2));
+                y += (amp * 0.3) * Math.exp(-Math.pow((phase - 0.45) * 100, 2)); // Q
+                y -= (amp * 3.0) * Math.exp(-Math.pow((phase - 0.5) * 150, 2)); // R
+                y += (amp * 0.5) * Math.exp(-Math.pow((phase - 0.55) * 100, 2)); // S
+                y -= (amp * 0.6) * Math.exp(-Math.pow((phase - 0.8) * 15, 2));
+                y += (Math.random() - 0.5) * 2;
+
+                if(x===0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+
+    </script>
+</body>
+</html>
